@@ -42,7 +42,9 @@ Data refreshes every 5 minutes, and when you open the panel if the last refresh 
 
 ### Token expiry
 
-The app does not refresh tokens. If you haven't used a CLI for a while, its access token expires and the panel asks you to run `claude` or `codex` once, which refreshes it.
+The app never calls an OAuth refresh endpoint or writes a credential itself.
+- **Claude:** the access token only lives a few hours, and only the standalone `claude` CLI renews it. When the token is within 4 minutes of expiry, the app runs `claude -p --no-session-persistence --strict-mcp-config` with empty stdin in the background: the CLI renews the token at start-up, then exits because no prompt arrived (no conversation, no usage). It counts as success only if the keychain's `expiresAt` actually moved; each token gets one attempt plus a 10-minute cooldown. The copy of Claude Code bundled inside the desktop app is never used (it doesn't write the keychain). Claude Code can leave several duplicate keychain items, so the newest-modified one is read.
+- **Codex:** if you haven't used it for a while the panel asks you to run `codex` once, which refreshes the token.
 
 ## Caveats
 

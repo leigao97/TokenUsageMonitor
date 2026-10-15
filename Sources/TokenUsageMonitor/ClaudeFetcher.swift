@@ -9,12 +9,14 @@ enum ClaudeFetcher {
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
     static let relogin = "Claude session expired. Run `claude` once in a terminal to refresh it, then retry."
 
-    struct Credentials { let token: String; let plan: String? }
+    struct Credentials { let token: String; let plan: String?; let expiresAt: Date? }
 
     static func loadCredentials() -> Credentials? {
-        // 1) macOS Keychain (Claude Code's default store on macOS)
-        if let raw = keychainPassword(service: "Claude Code-credentials"),
-           let c = parse(Data(raw.utf8)) { return c }
+        // 1) macOS Keychain (Claude Code's default store on macOS). Newest item
+        //    first — there can be stale duplicates under the same service.
+        for raw in ClaudeKeychain.candidates() {
+            if let c = parse(Data(raw.utf8)) { return c }
+        }
         // 2) Credentials file (Linux, older versions, custom CLAUDE_CONFIG_DIR)
         let home = FileManager.default.homeDirectoryForCurrentUser
         var paths = [home.appendingPathComponent(".claude/.credentials.json")]
@@ -30,30 +32,28 @@ enum ClaudeFetcher {
     private static func parse(_ data: Data) -> Credentials? {
         guard let obj = J.object(data),
               let oauth = obj["claudeAiOauth"] as? [String: Any],
+              // Claude Code sometimes blanks the item (accessToken "", expiresAt 0)
+              // on sign-out; treat that as "no credential", not as a token.
               let token = oauth["accessToken"] as? String, !token.isEmpty else { return nil }
         let plan = (oauth["rateLimitTier"] as? String) ?? (oauth["subscriptionType"] as? String)
-        return Credentials(token: token, plan: plan.map(prettyPlan))
-    }
-
-    /// Reads the Keychain item via /usr/bin/security. Claude Code writes this item
-    /// with the same tool, so reading it normally does not trigger a prompt.
-    private static func keychainPassword(service: String) -> String? {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        p.arguments = ["find-generic-password", "-s", service, "-w"]
-        let out = Pipe()
-        p.standardOutput = out
-        p.standardError = Pipe()
-        do { try p.run() } catch { return nil }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        guard p.terminationStatus == 0 else { return nil }
-        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Credentials(token: token, plan: plan.map(prettyPlan), expiresAt: J.date(oauth["expiresAt"]))
     }
 
     static func fetch() async throws -> ProviderStatus {
-        guard let cred = loadCredentials() else {
+        guard var cred = loadCredentials() else {
             throw FetchError.notLoggedIn("No Claude Code login found. Run `claude` and sign in with your subscription.")
+        }
+        let renewer = ClaudeTokenRenewer.shared
+        await renewer.note(expiry: cred.expiresAt)
+        // Expired or about to: let the CLI renew it before we spend a request
+        // on a token the server will reject.
+        if await renewer.isNearExpiry(cred.expiresAt), let exp = cred.expiresAt {
+            if await renewer.renew(current: exp) != nil, let fresh = loadCredentials() {
+                cred = fresh
+            } else if exp <= Date() {
+                let why = await renewer.lastFailure
+                throw FetchError.unauthorized([why, relogin].compactMap { $0 }.joined(separator: " "))
+            }
         }
         var req = URLRequest(url: endpoint, timeoutInterval: 20)
         req.setValue("Bearer \(cred.token)", forHTTPHeaderField: "Authorization")

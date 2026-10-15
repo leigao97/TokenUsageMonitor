@@ -50,6 +50,10 @@ final class UsageStore: ObservableObject {
     /// Claude's usage endpoint rate-limits aggressively; keep polling slow.
     private let interval: TimeInterval = 300
     private var timer: Timer?
+    /// Checks every minute whether Claude's keychain token is about to expire
+    /// and, if so, has the `claude` CLI renew it (see ClaudeTokenRenewer).
+    /// Idle ticks use the expiry already in memory: no keychain read, no process.
+    private var renewTimer: Timer?
     private var lastRefresh: Date = .distantPast
     private var claudeBackoff = Backoff(key: "claude")
     private var codexBackoff = Backoff(key: "codex")
@@ -58,6 +62,9 @@ final class UsageStore: ObservableObject {
         Task { await refresh() }
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
+        }
+        renewTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            Task { await ClaudeTokenRenewer.shared.tick() }
         }
     }
 

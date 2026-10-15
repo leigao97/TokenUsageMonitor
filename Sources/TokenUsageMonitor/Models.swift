@@ -30,7 +30,7 @@ struct ProviderStatus {
 enum FetchError: LocalizedError {
     case notLoggedIn(String)
     case unauthorized(String)
-    case rateLimited
+    case rateLimited(retryAfter: TimeInterval?)
     case http(Int)
     case badResponse
 
@@ -38,7 +38,7 @@ enum FetchError: LocalizedError {
         switch self {
         case .notLoggedIn(let m): return m
         case .unauthorized(let m): return m
-        case .rateLimited: return "Rate limited (429). Showing last data; will retry automatically."
+        case .rateLimited: return "Rate limited (429)."
         case .http(let c): return "Request failed: HTTP \(c)"
         case .badResponse: return "Unexpected response (the endpoint may have changed)."
         }
@@ -83,7 +83,9 @@ enum HTTP {
         switch code {
         case 200..<300: break
         case 401, 403: throw FetchError.unauthorized(reloginHint)
-        case 429: throw FetchError.rateLimited
+        case 429:
+            let header = (resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Retry-After")
+            throw FetchError.rateLimited(retryAfter: header.flatMap { TimeInterval($0) })
         default: throw FetchError.http(code)
         }
         guard let obj = J.object(data) else { throw FetchError.badResponse }

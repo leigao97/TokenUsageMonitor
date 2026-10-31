@@ -109,6 +109,7 @@ struct ProviderSection: View {
 
             if let extra = status.extra {
                 Text(extra).font(.system(size: 11)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)   // wrap instead of truncating
             }
             if let err = status.error {
                 Label(err, systemImage: "exclamationmark.circle")

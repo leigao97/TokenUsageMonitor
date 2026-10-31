@@ -30,6 +30,7 @@ actor ClaudeTokenRenewer {
     private var attemptedFor: Date?
     private var lastAttempt: Date?
     private var isRunning = false
+    private var announced = false
     /// Why the last attempt didn't work, for the UI. nil after a success.
     private(set) var lastFailure: String?
 
@@ -56,7 +57,11 @@ actor ClaudeTokenRenewer {
         // otherwise renewal would stay blind for the whole backoff.
         if knownExpiry == nil {
             knownExpiry = ClaudeFetcher.loadCredentials()?.expiresAt
-            if let e = knownExpiry { NSLog("TokenUsageMonitor: Claude token expires %@", "\(e)") }
+        }
+        if !announced {
+            announced = true
+            NSLog("TokenUsageMonitor: Claude token renewer active; cli=%@; token expires %@",
+                  cli?.path ?? "NOT FOUND", knownExpiry.map { "\($0)" } ?? "unknown")
         }
         guard isNearExpiry(knownExpiry) else { return }
         // Confirm against the keychain first — the user may have run `claude`
@@ -80,6 +85,7 @@ actor ClaudeTokenRenewer {
 
         guard let cli else {
             lastFailure = "No standalone `claude` CLI found to renew the token automatically."
+            NSLog("TokenUsageMonitor: Claude token near expiry but no standalone claude CLI found")
             return nil
         }
         NSLog("TokenUsageMonitor: Claude token expires %@; renewing via %@", "\(current)", cli.path)

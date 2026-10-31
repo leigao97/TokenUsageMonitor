@@ -109,12 +109,30 @@ enum ClaudeFetcher {
             status.windows.sort { order($0.id) < order($1.id) || (order($0.id) == order($1.id) && $0.id < $1.id) }
         }
 
+        var notes: [String] = []
+        // Verified Ultra accounts have no 5-hour limit, so the session entry goes
+        // away. Say so, rather than leaving it looking like missing data.
+        if cred.plan == "Ultra", !status.windows.contains(where: { $0.windowSeconds == 5 * 3600 }) {
+            notes.append("No 5-hour limit")
+        }
+        // Where this week's usage went, e.g. "Cowork 58% · Claude Code 41% · Chats 1%".
+        if let rows = (obj["seven_day_breakdown"] as? [String: Any])?["rows"] as? [[String: Any]] {
+            let parts = rows
+                .compactMap { r -> (String, Double)? in
+                    guard let name = r["display_name"] as? String, let pct = J.double(r["percent"]), pct > 0 else { return nil }
+                    return (name, pct)
+                }
+                .sorted { $0.1 > $1.1 }
+                .map { "\($0.0) \(Int($0.1.rounded()))%" }
+            if !parts.isEmpty { notes.append("This week’s usage by product:\n" + parts.joined(separator: " · ")) }
+        }
         if let extra = obj["extra_usage"] as? [String: Any], (extra["is_enabled"] as? Bool) == true,
            let used = J.double(extra["used_credits"]) {
             let limit = J.double(extra["monthly_limit"])
-            status.extra = limit.map { String(format: "Extra usage $%.2f / $%.2f", used / 100, $0 / 100) }
-                ?? String(format: "Extra usage $%.2f", used / 100)
+            notes.append(limit.map { String(format: "Extra usage $%.2f / $%.2f", used / 100, $0 / 100) }
+                ?? String(format: "Extra usage $%.2f", used / 100))
         }
+        if !notes.isEmpty { status.extra = notes.joined(separator: "\n") }
         if status.windows.isEmpty { throw FetchError.badResponse }
         return status
     }
@@ -140,10 +158,12 @@ enum ClaudeFetcher {
         }
     }
 
+    /// Oct 2026: Max 20x was renamed Ultra and Max 5x became plain Max. The
+    /// keychain tier string still reads `default_claude_max_20x`, so map it here.
     static func prettyPlan(_ raw: String) -> String {
         let r = raw.lowercased()
-        if r.contains("max") && r.contains("20") { return "Max (20x)" }
-        if r.contains("max") && r.contains("5") { return "Max (5x)" }
+        if r.contains("ultra") { return "Ultra" }
+        if r.contains("max") && r.contains("20") { return "Ultra" }
         if r.contains("max") { return "Max" }
         if r.contains("pro") { return "Pro" }
         if r.contains("team") { return "Team" }

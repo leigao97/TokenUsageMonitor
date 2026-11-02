@@ -8,6 +8,13 @@ enum CodexFetcher {
     static let endpoint = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
     static let relogin = "Codex session expired. Run `codex` once in a terminal to refresh it, then retry."
 
+    /// "promax" -> "Pro Max", "plus" -> "Plus", "team_plus" -> "Team Plus".
+    static func prettyPlan(_ raw: String) -> String {
+        let r = raw.lowercased()
+        if r == "promax" || r == "pro_max" { return "Pro Max" }
+        return r.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
     struct Credentials { let token: String; let accountID: String? }
 
     static func authFile() -> URL {
@@ -38,7 +45,7 @@ enum CodexFetcher {
         let obj = try await HTTP.getJSON(req, reloginHint: relogin)
 
         var status = ProviderStatus(updatedAt: Date())
-        if let plan = obj["plan_type"] as? String { status.plan = plan.capitalized }
+        if let plan = obj["plan_type"] as? String { status.plan = prettyPlan(plan) }
 
         if let rl = obj["rate_limit"] as? [String: Any] {
             status.windows += windows(from: rl, prefix: "", idPrefix: "codex")

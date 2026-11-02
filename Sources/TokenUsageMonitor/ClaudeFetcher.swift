@@ -14,8 +14,10 @@ enum ClaudeFetcher {
     static func loadCredentials() -> Credentials? {
         // 1) macOS Keychain (Claude Code's default store on macOS). Newest item
         //    first — there can be stale duplicates under the same service.
+        sawClearedCredential = false
         for raw in ClaudeKeychain.candidates() {
             if let c = parse(Data(raw.utf8)) { return c }
+            if isCleared(Data(raw.utf8)) { sawClearedCredential = true }
         }
         // 2) Credentials file (Linux, older versions, custom CLAUDE_CONFIG_DIR)
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -27,6 +29,16 @@ enum ClaudeFetcher {
             if let d = try? Data(contentsOf: p), let c = parse(d) { return c }
         }
         return nil
+    }
+
+    /// Set by `loadCredentials` when the keychain item exists but Claude Code has
+    /// blanked it (`accessToken: ""`) — what it does on sign-out or when its
+    /// refresh token stops working. Needs a fresh `/login`, not just a renewal.
+    private(set) static var sawClearedCredential = false
+
+    private static func isCleared(_ data: Data) -> Bool {
+        guard let oauth = J.object(data)?["claudeAiOauth"] as? [String: Any] else { return false }
+        return ((oauth["accessToken"] as? String) ?? "").isEmpty
     }
 
     private static func parse(_ data: Data) -> Credentials? {
@@ -41,6 +53,11 @@ enum ClaudeFetcher {
 
     static func fetch() async throws -> ProviderStatus {
         guard var cred = loadCredentials() else {
+            NSLog("TokenUsageMonitor: no usable Claude credential (cleared=%@); %@",
+                  sawClearedCredential ? "yes" : "no", ClaudeKeychain.diagnostics())
+            if sawClearedCredential {
+                throw FetchError.notLoggedIn("Claude Code's saved login was cleared (signed out, or its refresh token stopped working). Run `claude` in a terminal and use /login.")
+            }
             throw FetchError.notLoggedIn("No Claude Code login found. Run `claude` and sign in with your subscription.")
         }
         let renewer = ClaudeTokenRenewer.shared
